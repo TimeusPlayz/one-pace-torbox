@@ -1,0 +1,13 @@
+{
+  "name": "one-pace-torbox",
+  "version": "2.2.0",
+  "description": "One Pace Stremio Addon",
+  "main": "addon.js",
+  "scripts": {
+    "start": "node addon.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "stremio-addon-sdk": "^1.22.0"
+  }
+}
