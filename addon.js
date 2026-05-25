@@ -42,7 +42,7 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '3.6.1',
+    version: '3.6.2',
     name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series mapped chronologically via Torbox with absolute stream alignment.',
     types: ['series'],
@@ -57,7 +57,6 @@ const builder = new addonBuilder({
 
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// FIX 1: Correctly parsing Nyaa's specific RSS namespace format via infoHash
 const parseRSS = (xmlText) => {
     const items = [];
     const itemRegex = /<item>([\s\S]*?)<\/item>/g;
@@ -74,7 +73,6 @@ const parseRSS = (xmlText) => {
             
             items.push({
                 title: title,
-                // Manually build a bulletproof magnet link directly from the parsed infohash
                 link: `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}`,
                 pubDate: dateMatch ? new Date(dateMatch[1]) : new Date(0)
             });
@@ -110,7 +108,27 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
             const titleLower = item.title.toLowerCase();
             if (!titleLower.includes('one pace') || !titleLower.includes(arcName.toLowerCase())) continue;
 
-            const isBatch = titleLower.includes('batch');
+            // Intelligent Batch Detection Engine
+            let isBatch = titleLower.includes('batch') || /\b\d{1,3}\s*-\s*\d{1,3}\b/.test(titleLower);
+
+            if (!isBatch) {
+                // Strip resolutions, codecs, years, and bracket tags to isolate true numbers
+                const cleanTitle = titleLower
+                    .replace(/\b\d{3,4}p\b/g, '') 
+                    .replace(/\bx26[45]\b/g, '') 
+                    .replace(/\b10bit\b/g, '') 
+                    .replace(/\b(?:19|20)\d{2}\b/g, '') 
+                    .replace(/\[.*?\]/g, '') 
+                    .replace(/\(.*?\)/g, '') 
+                    .trim();
+
+                // If the cleaned title has NO standalone numbers, it is inherently a full arc batch
+                const hasStandaloneNumber = /\b\d{1,3}\b/.test(cleanTitle);
+                if (!hasStandaloneNumber) {
+                    isBatch = true;
+                }
+            }
+
             let matchesEpisode = false;
 
             if (isBatch) {
@@ -122,7 +140,8 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
                     matchesEpisode = true;
                 }
             } else {
-                const epRegex = new RegExp(`(?<!\\d)${epPad}(?!\\d)`);
+                // Flexible regex to allow "1" to match "01" transparently
+                const epRegex = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
                 if (epRegex.test(item.title)) {
                     matchesEpisode = true;
                 }
@@ -144,6 +163,7 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
         const batches = candidates.filter(c => c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
         const individuals = candidates.filter(c => !c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
 
+        // Priority Fallback Logic
         if (batches.length > 0 && individuals.length > 0) {
             if (individuals[0].pubDate > batches[0].pubDate) return individuals[0];
             return batches[0];
@@ -205,11 +225,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let season = parseInt(parts[2], 10);
     let episode = parseInt(parts[3], 10);
 
-    // Inversion Protection Shield
     if (season <= ARCS.length && episode <= ARCS.length) {
         const standardMax = ARCS[season - 1] ? ARCS[season - 1].eps : 0;
         const swappedMax = ARCS[episode - 1] ? ARCS[episode - 1].eps : 0;
-        
         if (episode > standardMax && season <= swappedMax) {
             [season, episode] = [episode, season];
         }
@@ -259,7 +277,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
             let torrentId = createRes.data?.data?.torrent_id || createRes.data?.data?.id;
             
-            // FIX 2: If torrent already exists in account dashboard, locate its ID dynamically
             if (!torrentId) {
                 const listAllRes = await axios.get('https://api.torbox.app/v1/api/torrents/mylist', { headers });
                 const allTorrents = listAllRes.data?.data || [];
@@ -269,10 +286,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 }
             }
 
-            if (!torrentId) {
-                console.error("Failed to acquire torrentId from cached path pipeline:", JSON.stringify(createRes.data));
-                return { streams: [] };
-            }
+            if (!torrentId) return { streams: [] };
 
             const mylistRes = await axios.get(`https://api.torbox.app/v1/api/torrents/mylist?id=${torrentId}`, { headers });
             const rawData = mylistRes.data?.data;
@@ -325,11 +339,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     }]
                 };
             }
-            
-            console.error("requestdl failed to resolve URL string:", JSON.stringify(dlRes.data));
             return { streams: [] };
         } else {
-            // Uncached Path execution (Fire-and-forget background cache ingestion)
             axios.post(
                 'https://api.torbox.app/v1/api/torrents/createtorrent',
                 new URLSearchParams({ magnet }).toString(),
@@ -337,12 +348,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
                     validateStatus: () => true
                 }
-            ).catch(err => console.error("Background caching request error loop:", err.message));
+            ).catch(err => console.error("Background caching error:", err.message));
 
             return {
                 streams: [{
                     name: 'Torbox\n[DOWNLOADING]',
-                    title: `Caching... Check back later.\nTorbox caching engine processing: ${arcName} ${epPad}`,
+                    title: `Caching... Check back later.\nTorbox processing: ${arcName} ${epPad}`,
                     url: "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
                 }]
             };
@@ -355,4 +366,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v3.6.1 active on port 7000');
+console.log('One Pace Torbox Addon v3.6.2 active on port 7000');
