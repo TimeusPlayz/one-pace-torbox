@@ -42,8 +42,8 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '3.4.0',
-    name: 'One Pace - Torbox Elite',
+    version: '3.5.0',
+    name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series mapped chronologically via Torbox with absolute stream alignment.',
     types: ['series'],
     catalogs: [{
@@ -77,51 +77,24 @@ const parseRSS = (xmlText) => {
     return items;
 };
 
-const checkIsBatch = (title, arcName) => {
-    const titleLower = title.toLowerCase();
-    if (titleLower.includes('batch')) return true;
-    if (/\[\d+-\d+\]/.test(title) || /\d+-\d+/.test(title)) return true;
-    if (titleLower.includes('act 1') || titleLower.includes('act 2')) return true;
-    
-    const EastonArc = arcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const individualRegex = new RegExp(`${EastonArc}\\s+\\d+`, 'i');
-    if (!individualRegex.test(title) && titleLower.includes(arcName.toLowerCase())) {
-        return true;
-    }
-    return false;
-};
-
 const fetchChronologicalRelease = async (arcName, epPad, episode) => {
     const baseUrl = 'https://nyaa.si/?page=rss&u=Galaxy9000';
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
 
     try {
+        // FIXED: Clean keyword terms without literal double quotes
         const qIndiv = `One Pace ${arcName} ${epPad}`;
-        let qBatch = `One Pace ${arcName}`;
-        let batchArcName = arcName;
+        const qBatch = `One Pace ${arcName}`;
 
-        if (arcName === 'Wano') {
-            if (episode <= 12) {
-                batchArcName = 'Wano Act 1';
-                qBatch = `One Pace Wano Act 1`;
-            } else if (episode <= 30) {
-                batchArcName = 'Wano Act 2';
-                qBatch = `One Pace Wano Act 2`;
-            } else {
-                qBatch = null; 
-            }
-        }
+        const [resIndiv, resBatch] = await Promise.all([
+            axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers }),
+            axios.get(`${baseUrl}&q=${encodeURIComponent(qBatch)}`, { headers })
+        ]);
 
-        const promises = [axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers })];
-        if (qBatch) {
-            promises.push(axios.get(`${baseUrl}&q=${encodeURIComponent(qBatch)}`, { headers }));
-        }
-
-        const responses = await Promise.all(promises);
-        const itemsIndiv = parseRSS(responses[0].data);
-        const itemsBatch = qBatch ? parseRSS(responses[1].data) : [];
-
+        const itemsIndiv = parseRSS(resIndiv.data);
+        const itemsBatch = parseRSS(resBatch.data);
         const allItems = [...itemsIndiv, ...itemsBatch];
+
         const uniqueLinks = new Set();
         let candidates = [];
 
@@ -130,15 +103,34 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
             uniqueLinks.add(item.link);
 
             const titleLower = item.title.toLowerCase();
-            if (!titleLower.includes('one pace')) continue;
-            if (!titleLower.includes(arcName.toLowerCase()) && !titleLower.includes(batchArcName.toLowerCase())) continue;
+            if (!titleLower.includes('one pace') || !titleLower.includes(arcName.toLowerCase())) continue;
 
-            const isBatch = checkIsBatch(item.title, arcName);
+            const isBatch = titleLower.includes('batch');
+            let matchesEpisode = false;
 
-            candidates.push({
-                title: item.title, magnet: item.link, pubDate: item.pubDate,
-                isBatch: isBatch, isExtended: /extended/i.test(item.title)
-            });
+            if (isBatch) {
+                // Handle multi-part arc mapping safely
+                if (arcName === 'Wano') {
+                    if (episode <= 12 && titleLower.includes('act 1')) matchesEpisode = true;
+                    else if (episode >= 13 && episode <= 30 && titleLower.includes('act 2')) matchesEpisode = true;
+                } else {
+                    // Standard arcs release a single batch for the entire arc
+                    matchesEpisode = true;
+                }
+            } else {
+                // Individual episode number validation via strict word boundary
+                const epRegex = new RegExp(`(?<!\\d)${epPad}(?!\\d)`);
+                if (epRegex.test(item.title)) {
+                    matchesEpisode = true;
+                }
+            }
+
+            if (matchesEpisode) {
+                candidates.push({
+                    title: item.title, magnet: item.link, pubDate: item.pubDate,
+                    isBatch: isBatch, isExtended: /extended/i.test(item.title)
+                });
+            }
         }
 
         if (candidates.length === 0) return null;
@@ -158,7 +150,7 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
             return individuals[0];
         }
     } catch (error) {
-        console.error("Nyaa Chrono Processing Error:", error.message);
+        console.error("Nyaa Engine Processing Failure:", error.message);
     }
     return null;
 };
@@ -312,4 +304,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('Standalone One Pace Catalog Addon v3.4 active on port 7000');
+console.log('Standalone One Pace Catalog Addon v3.5 active on port 7000');
