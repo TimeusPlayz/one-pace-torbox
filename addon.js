@@ -42,7 +42,7 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '4.1.1',
+    version: '4.1.2',
     name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series. Automatically serves the newest Standard release alongside Extended/G8 alternative cuts.',
     types: ['series'],
@@ -82,7 +82,9 @@ const parseRSS = (xmlText) => {
 };
 
 const getMatchingReleases = async (arcName, episode) => {
-    const baseUrl = 'https://nyaa.si/?page=rss&u=Galaxy9000';
+    // FIX: Removed strict uploader parameter (&u=Galaxy9000) to search site-wide for Anonymous uploads.
+    // Kept c=1_2 (Anime - English Translated) to keep the payload clean and fast.
+    const baseUrl = 'https://nyaa.si/?page=rss&c=1_2'; 
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
     const epPad = episode.toString().padStart(2, '0');
 
@@ -311,7 +313,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 let fileId = null;
 
                 if (files.length > 0) {
-                    // Correctly enclosed filter function
                     const videoFiles = files.filter(f => f.name.match(/\.(mkv|mp4|avi|webm)$/i));
                     
                     if (videoFiles.length === 1) {
@@ -380,4 +381,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v4.1.1 active on port 7000');
+console.log('One Pace Torbox Addon v4.1.2 active on port 7000');
