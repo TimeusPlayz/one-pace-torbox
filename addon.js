@@ -12,7 +12,8 @@ const ARCS = [
     { name: "The Adventures of Buggy's Crew", eps: 1, q: "Buggy", m: ["buggy", "buggy's crew"] },
     { name: "Loguetown", eps: 3, q: "Loguetown", m: ["loguetown"] },
     { name: "Reverse Mountain", eps: 2, q: "Reverse Mountain", m: ["reverse mountain"] },
-    { name: "Whiskey Peak", eps: 2, q: "Whisky Peak", m: ["whisky peak", "whiskey peak"] },
+    // FIX 1: Optimized query to "Whisk" to grab both "Whisky" and "Whiskey" variations
+    { name: "Whiskey Peak", eps: 2, q: "Whisk", m: ["whisky peak", "whiskey peak"] },
     { name: "The Trials of Koby-Meppo", eps: 1, q: "Koby", m: ["koby", "koby-meppo", "meppo"] },
     { name: "Little Garden", eps: 5, q: "Little Garden", m: ["little garden"] },
     { name: "Drum Island", eps: 8, q: "Drum Island", m: ["drum island"] },
@@ -43,7 +44,7 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '4.3.2',
+    version: '4.3.3',
     name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series. Complete site-wide legacy arc coverage with standard & alternate stream slot logic.',
     types: ['series'],
@@ -122,7 +123,6 @@ const getMatchingReleases = async (arc, episode) => {
             const matchesArcName = arc.m.some(term => titleLower.includes(term));
             if (!matchesArcName) continue;
 
-            // FIX 4: Strips original chapter/episode mappings out of brackets e.g., [8-11]
             let cleanTitle = item.title
                 .replace(/\[[a-fA-F0-9]{8}\]/g, '')               
                 .replace(/[\(\[][\d\s\-~,&]+[\)\]]/g, '')         
@@ -139,11 +139,18 @@ const getMatchingReleases = async (arc, episode) => {
             let isBatch = false;
 
             if (rangeMatch) {
-                isBatch = true;
                 const start = parseInt(rangeMatch[1], 10);
                 const end = parseInt(rangeMatch[2], 10);
-                if (episode >= start && episode <= end) {
-                    matchesEpisode = true;
+                
+                // FIX 2: Detect if the range represents manga chapters (e.g., 106-114) instead of One Pace episode counts.
+                if (start > arc.eps) {
+                    isBatch = true;
+                    matchesEpisode = true; // Fallback: Treat as a macro arc batch
+                } else {
+                    isBatch = true;
+                    if (episode >= start && episode <= end) {
+                        matchesEpisode = true;
+                    }
                 }
             } else {
                 const standaloneNumbers = [];
@@ -153,8 +160,11 @@ const getMatchingReleases = async (arc, episode) => {
                     standaloneNumbers.push(parseInt(m[1], 10));
                 }
 
-                if (standaloneNumbers.length > 0) {
-                    if (standaloneNumbers.includes(episode)) {
+                // FIX 3: Ignore stray absolute anime episode / manga chapter numbers when matching standalone counts
+                const validPaceNumbers = standaloneNumbers.filter(num => num <= arc.eps);
+
+                if (validPaceNumbers.length > 0) {
+                    if (validPaceNumbers.includes(episode)) {
                         matchesEpisode = true;
                     }
                 } else {
@@ -344,7 +354,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             } else {
                                 const regEp = new RegExp("(?<!\\d)0*" + episode + "(?!\\d)");
                                 const matchedFile = videoFiles.find(f => {
-                                    // FIX 4 continued: Keep file matcher synced with Nyaa title matcher
                                     const cleanFileName = f.name
                                         .replace(/\[[a-fA-F0-9]{8}\]/g, '')
                                         .replace(/[\(\[][\d\s\-~,&]+[\)\]]/g, '')
@@ -405,4 +414,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v4.3.2 active on port 7000');
+console.log('One Pace Torbox Addon v4.3.3 active on port 7000');
