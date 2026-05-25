@@ -1,7 +1,6 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// Updated with your accurate episode counts
 const ARCS = [
     { name: "Romance Dawn", eps: 4 },
     { name: "Orange Town", eps: 3 },
@@ -43,9 +42,9 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '3.2.0',
+    version: '3.3.0',
     name: 'One Pace - Torbox Elite',
-    description: 'Standalone One Pace series mapped chronologically via Torbox with Wano/Dressrosa fixes.',
+    description: 'Standalone One Pace series mapped chronologically via Torbox with absolute stream alignment.',
     types: ['series'],
     catalogs: [{
         type: 'series',
@@ -78,26 +77,41 @@ const parseRSS = (xmlText) => {
     return items;
 };
 
-// Now includes the 'episode' argument for the Wano Act logic
+// Intelligent Title Classifier to determine if a torrent is a Batch vs Individual
+const checkIsBatch = (title, arcName) => {
+    const titleLower = title.toLowerCase();
+    if (titleLower.includes('batch')) return true;
+    if (/\[\d+-\d+\]/.test(title) || /\d+-\d+/.test(title)) return true;
+    if (titleLower.includes('act 1') || titleLower.includes('act 2')) return true;
+    
+    // If it mentions the arc but has no single standalone episode suffix, it is a batch container
+    const escapedArc = arcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const individualRegex = new RegExp(`${escapedArc}\\s+\\d+`, 'i');
+    if (!individualRegex.test(title) && titleLower.includes(arcName.toLowerCase())) {
+        return true;
+    }
+    return false;
+};
+
 const fetchChronologicalRelease = async (arcName, epPad, episode) => {
     const baseUrl = 'https://nyaa.si/?page=rss&u=Galaxy9000';
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
 
     try {
-        const qIndiv = `"One Pace" "${arcName} ${epPad}"`;
-        let qBatch = `"One Pace" "${arcName}"`;
+        // Clean keyword queries allowing flexible layout matching
+        const qIndiv = `One Pace ${arcName} ${epPad}`;
+        let qBatch = `One Pace ${arcName}`;
         let batchArcName = arcName;
 
-        // Wano Act Splitter Logic
         if (arcName === 'Wano') {
             if (episode <= 12) {
                 batchArcName = 'Wano Act 1';
-                qBatch = `"One Pace" "Wano Act 1"`;
+                qBatch = `One Pace Wano Act 1`;
             } else if (episode <= 30) {
                 batchArcName = 'Wano Act 2';
-                qBatch = `"One Pace" "Wano Act 2"`;
+                qBatch = `One Pace Wano Act 2`;
             } else {
-                qBatch = null; // Act 3+ is unbatched, skip batch searching
+                qBatch = null; 
             }
         }
 
@@ -110,25 +124,24 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
         const itemsIndiv = parseRSS(responses[0].data);
         const itemsBatch = qBatch ? parseRSS(responses[1].data) : [];
 
+        const allItems = [...itemsIndiv, ...itemsBatch];
+        const uniqueLinks = new Set();
         let candidates = [];
 
-        for (const item of itemsIndiv) {
+        for (const item of allItems) {
+            if (uniqueLinks.has(item.link)) continue;
+            uniqueLinks.add(item.link);
+
+            const titleLower = item.title.toLowerCase();
+            if (!titleLower.includes('one pace')) continue;
+            if (!titleLower.includes(arcName.toLowerCase()) && !titleLower.includes(batchArcName.toLowerCase())) continue;
+
+            const isBatch = checkIsBatch(item.title, arcName);
+
             candidates.push({
                 title: item.title, magnet: item.link, pubDate: item.pubDate,
-                isBatch: false, isExtended: /extended/i.test(item.title)
+                isBatch: isBatch, isExtended: /extended/i.test(item.title)
             });
-        }
-
-        const escapedArc = batchArcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const batchRegex = new RegExp(`\\[One\\s+Pace\\]\\[\\d+[-迎,\\d]*\\]\\s*${escapedArc}\\s*\\[`, 'i');
-
-        for (const item of itemsBatch) {
-            if (batchRegex.test(item.title)) {
-                candidates.push({
-                    title: item.title, magnet: item.link, pubDate: item.pubDate,
-                    isBatch: true, isExtended: /extended/i.test(item.title)
-                });
-            }
         }
 
         if (candidates.length === 0) return null;
@@ -205,7 +218,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const arcName = ARCS[season - 1].name;
     const epPad = episode.toString().padStart(2, '0');
 
-    // Passing the raw episode number into the chronological fetcher
     const bestRelease = await fetchChronologicalRelease(arcName, epPad, episode);
     if (!bestRelease) return { streams: [] };
 
@@ -235,22 +247,21 @@ builder.defineStreamHandler(async ({ type, id }) => {
             const torrentData = createRes.data?.data;
             
             if (isBatch && torrentData?.files && torrentData.files.length > 0) {
-                // Filter out non-video fluff
                 const videoFiles = torrentData.files.filter(f => f.name.match(/\.(mkv|mp4|avi)$/i));
                 
                 if (arcName === 'Dressrosa') {
-                    // Dressrosa Alphabetical Indexing bypass
                     videoFiles.sort((a, b) => a.name.localeCompare(b.name)); 
                     const targetIndex = episode - 1; 
                     if (targetIndex >= 0 && targetIndex < videoFiles.length) {
                         fileId = videoFiles[targetIndex].id;
                     }
                 } else {
-                    const fileMatch = videoFiles.find(f => {
+                    // Safe numeric lookbehind boundary selector to strictly match the file token inside the batch
+                    fileId = videoFiles.find(f => {
                         const name = f.name.toLowerCase();
-                        return name.includes(` ${epPad} `) || name.includes(`${epPad}.mkv`) || name.includes(`_${epPad}`);
-                    });
-                    if (fileMatch) fileId = fileMatch.id;
+                        const regEp = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
+                        return regEp.test(name);
+                    })?.id || null;
                 }
             }
 
@@ -288,4 +299,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('Standalone One Pace Catalog Addon v3.2 active on port 7000');
+console.log('Standalone One Pace Catalog Addon v3.3 active on port 7000');
