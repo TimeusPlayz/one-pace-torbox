@@ -37,13 +37,12 @@ const ARCS = [
     { name: "Whole Cake Island", eps: 39 },
     { name: "Reverie", eps: 3 },
     { name: "Wano", eps: 90 },
-    { name: "Egghead", eps: 35 } 
+    { name: "Egghead", eps: 35 }
 ];
 
-// 1. RESTORED MANIFEST: Added catalog and meta resources back so Stremio recognizes the UI
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '3.5.2',
+    version: '3.6.0',
     name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series mapped chronologically via Torbox with absolute stream alignment.',
     types: ['series'],
@@ -58,19 +57,27 @@ const builder = new addonBuilder({
 
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
+// -----------------------------------------------------------------
+// FIX 1: Parse <nyaa:magnet> instead of <link>.
+// In Nyaa's RSS feed, <link> is the *page URL* (e.g. nyaa.si/view/123),
+// NOT the magnet URI. The magnet is always in <nyaa:magnet>.
+// The old code meant hashMatch always returned null → always { streams: [] }.
+// -----------------------------------------------------------------
 const parseRSS = (xmlText) => {
     const items = [];
     const itemRegex = /<item>([\s\S]*?)<\/item>/g;
     let match;
     while ((match = itemRegex.exec(xmlText)) !== null) {
         const itemContent = match[1];
-        const titleMatch = itemContent.match(/<title>([\s\S]*?)<\/title>/);
-        const linkMatch = itemContent.match(/<link>([\s\S]*?)<\/link>/);
-        const dateMatch = itemContent.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
-        if (titleMatch && linkMatch) {
+        const titleMatch  = itemContent.match(/<title>([\s\S]*?)<\/title>/);
+        const magnetMatch = itemContent.match(/<nyaa:magnet>([\s\S]*?)<\/nyaa:magnet>/);
+        const dateMatch   = itemContent.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+
+        // Only push items that have both a title and a real magnet link
+        if (titleMatch && magnetMatch) {
             items.push({
-                title: titleMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim(),
-                link: linkMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim(),
+                title:   titleMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim(),
+                link:    magnetMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim(),
                 pubDate: dateMatch ? new Date(dateMatch[1]) : new Date(0)
             });
         }
@@ -93,10 +100,10 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
 
         const itemsIndiv = parseRSS(resIndiv.data);
         const itemsBatch = parseRSS(resBatch.data);
-        const allItems = [...itemsIndiv, ...itemsBatch];
+        const allItems   = [...itemsIndiv, ...itemsBatch];
 
         const uniqueLinks = new Set();
-        let candidates = [];
+        let candidates    = [];
 
         for (const item of allItems) {
             if (uniqueLinks.has(item.link)) continue;
@@ -117,15 +124,16 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
                 }
             } else {
                 const epRegex = new RegExp(`(?<!\\d)${epPad}(?!\\d)`);
-                if (epRegex.test(item.title)) {
-                    matchesEpisode = true;
-                }
+                if (epRegex.test(item.title)) matchesEpisode = true;
             }
 
             if (matchesEpisode) {
                 candidates.push({
-                    title: item.title, magnet: item.link, pubDate: item.pubDate,
-                    isBatch: isBatch, isExtended: /extended/i.test(item.title)
+                    title:      item.title,
+                    magnet:     item.link,
+                    pubDate:    item.pubDate,
+                    isBatch:    isBatch,
+                    isExtended: /extended/i.test(item.title)
                 });
             }
         }
@@ -135,12 +143,11 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
         const extendedPool = candidates.filter(c => c.isExtended);
         if (extendedPool.length > 0) candidates = extendedPool;
 
-        const batches = candidates.filter(c => c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
+        const batches     = candidates.filter(c =>  c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
         const individuals = candidates.filter(c => !c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
 
         if (batches.length > 0 && individuals.length > 0) {
-            if (individuals[0].pubDate > batches[0].pubDate) return individuals[0];
-            return batches[0];
+            return individuals[0].pubDate > batches[0].pubDate ? individuals[0] : batches[0];
         } else if (batches.length > 0) {
             return batches[0];
         } else if (individuals.length > 0) {
@@ -152,13 +159,15 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
     return null;
 };
 
-// 2. RESTORED CATALOG HANDLER
+// CATALOG HANDLER
 builder.defineCatalogHandler(({ type, id }) => {
     if (type === 'series' && id === 'onepace_catalog') {
         return Promise.resolve({
             metas: [{
-                id: 'onepace:1', type: 'series', name: 'One Pace',
-                poster: 'https://artworks.thetvdb.com/banners/posters/329606-1.jpg',
+                id:          'onepace:1',
+                type:        'series',
+                name:        'One Pace',
+                poster:      'https://artworks.thetvdb.com/banners/posters/329606-1.jpg',
                 description: 'One Pace recuts the One Piece anime to bring it more in line with the manga.'
             }]
         });
@@ -166,7 +175,7 @@ builder.defineCatalogHandler(({ type, id }) => {
     return Promise.resolve({ metas: [] });
 });
 
-// 3. RESTORED META HANDLER
+// META HANDLER
 builder.defineMetaHandler(({ type, id }) => {
     if (type === 'series' && id === 'onepace:1') {
         const videos = [];
@@ -174,162 +183,198 @@ builder.defineMetaHandler(({ type, id }) => {
             const season = index + 1;
             for (let ep = 1; ep <= arc.eps; ep++) {
                 videos.push({
-                    id: `onepace:1:${season}:${ep}`,
-                    title: `${arc.name} ${ep}`,
-                    season: season, episode: ep,
+                    id:       `onepace:1:${season}:${ep}`,
+                    title:    `${arc.name} ${ep}`,
+                    season:   season,
+                    episode:  ep,
                     released: new Date().toISOString()
                 });
             }
         });
         return Promise.resolve({
             meta: {
-                id: 'onepace:1', type: 'series', name: 'One Pace',
-                poster: 'https://artworks.thetvdb.com/banners/posters/329606-1.jpg',
-                background: 'https://artworks.thetvdb.com/banners/fanart/original/329606-2.jpg',
+                id:          'onepace:1',
+                type:        'series',
+                name:        'One Pace',
+                poster:      'https://artworks.thetvdb.com/banners/posters/329606-1.jpg',
+                background:  'https://artworks.thetvdb.com/banners/fanart/original/329606-2.jpg',
                 description: 'One Pace recuts the One Piece anime to bring it more in line with the manga.',
-                videos: videos
+                videos:      videos
             }
         });
     }
     return Promise.resolve({ meta: {} });
 });
 
-// 4. FULLY REPAIRED STREAM HANDLER
+// STREAM HANDLER
 builder.defineStreamHandler(async ({ type, id }) => {
     if (type !== 'series' || !id.startsWith('onepace:1:')) return { streams: [] };
 
     const parts = id.split(':');
-    let season = parseInt(parts[2], 10);
+    let season  = parseInt(parts[2], 10);
     let episode = parseInt(parts[3], 10);
 
     // Inversion Protection Shield
     if (season <= ARCS.length && episode <= ARCS.length) {
         const standardMax = ARCS[season - 1] ? ARCS[season - 1].eps : 0;
-        const swappedMax = ARCS[episode - 1] ? ARCS[episode - 1].eps : 0;
-        
+        const swappedMax  = ARCS[episode - 1] ? ARCS[episode - 1].eps : 0;
         if (episode > standardMax && season <= swappedMax) {
-            const temp = season;
-            season = episode;
-            episode = temp;
+            [season, episode] = [episode, season];
         }
     } else if (season > ARCS.length && episode <= ARCS.length) {
-        const temp = season;
-        season = episode;
-        episode = temp;
+        [season, episode] = [episode, season];
     }
 
     if (season < 1 || season > ARCS.length) return { streams: [] };
 
     const arcName = ARCS[season - 1].name;
-    const epPad = episode.toString().padStart(2, '0');
+    const epPad   = episode.toString().padStart(2, '0');
 
     const bestRelease = await fetchChronologicalRelease(arcName, epPad, episode);
-    if (!bestRelease) return { streams: [] };
+    if (!bestRelease) {
+        console.error(`No Nyaa release found for: ${arcName} ${epPad}`);
+        return { streams: [] };
+    }
 
     const { magnet, isBatch, title: torrentTitle } = bestRelease;
-    
-    // Safety check to parse infoHash correctly 
-    const hashMatch = magnet.match(/urn:btih:([a-zA-Z0-9]+)/);
-    if (!hashMatch) return { streams: [] };
+
+    const hashMatch = magnet.match(/urn:btih:([a-zA-Z0-9]+)/i);
+    if (!hashMatch) {
+        console.error("Could not parse infoHash from magnet:", magnet);
+        return { streams: [] };
+    }
     const infoHash = hashMatch[1].toLowerCase();
 
     try {
         const headers = { Authorization: `Bearer ${TORBOX_API_KEY}` };
 
-        // Check if Torrent is Cached
-        const cacheRes = await axios.get(`https://api.torbox.app/v1/api/torrents/checkcached`, {
-            params: { hash: infoHash, format: 'list' }, headers
-        });
-        
+        // ── Cache Check ──────────────────────────────────────────────
+        const cacheRes = await axios.get(
+            'https://api.torbox.app/v1/api/torrents/checkcached',
+            { params: { hash: infoHash, format: 'list' }, headers }
+        );
+
         let isCached = false;
-        const cData = cacheRes.data?.data;
-        if (cData === true) isCached = true;
-        else if (Array.isArray(cData)) {
-            isCached = cData.some(item => (typeof item === 'string' ? item : item.hash)?.toLowerCase() === infoHash);
+        const cData  = cacheRes.data?.data;
+        if (cData === true) {
+            isCached = true;
+        } else if (Array.isArray(cData)) {
+            isCached = cData.some(item =>
+                (typeof item === 'string' ? item : item?.hash)?.toLowerCase() === infoHash
+            );
         } else if (typeof cData === 'object' && cData !== null) {
             isCached = !!cData[Object.keys(cData).find(k => k.toLowerCase() === infoHash)];
         }
 
-        if (isCached) {
-            // FIX: Torbox expects Form-Data layout. Using URLSearchParams mimics application/x-www-form-urlencoded seamlessly
-            const createRes = await axios.post(
-                'https://api.torbox.app/v1/api/torrents/createtorrent', 
-                new URLSearchParams({ magnet }).toString(), 
-                { headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' } }
-            );
+        // ── Not Cached: queue it and return a placeholder ────────────
+        if (!isCached) {
+            // Fire-and-forget: add the torrent so Torbox starts caching it
+            axios.post(
+                'https://api.torbox.app/v1/api/torrents/createtorrent',
+                new URLSearchParams({ magnet }).toString(),
+                {
+                    headers:        { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
+                    validateStatus: () => true   // don't throw on 4xx/5xx
+                }
+            ).catch(err => console.error("Queue request failed:", err.message));
 
-            const torrentId = createRes.data?.data?.torrent_id || createRes.data?.data?.id;
-            if (!torrentId) return { streams: [] };
+            return {
+                streams: [{
+                    name:  'Torbox\n[CACHING]',
+                    title: `Not cached yet — Torbox is now downloading it.\nCheck back in a few minutes.\n${arcName} ${epPad}`,
+                    url:   'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'
+                }]
+            };
+        }
 
-            // FIX: Query /mylist to actually retrieve the files array metadata
-            const mylistRes = await axios.get(`https://api.torbox.app/v1/api/torrents/mylist?id=${torrentId}`, { headers });
-            const files = mylistRes.data?.data?.files || [];
-            
-            let fileId = null;
+        // ── Cached: create / retrieve torrent ───────────────────────
+        // FIX 2: validateStatus prevents axios throwing on duplicate-torrent
+        // 4xx responses, which still carry a usable torrent_id in the body.
+        const createRes = await axios.post(
+            'https://api.torbox.app/v1/api/torrents/createtorrent',
+            new URLSearchParams({ magnet }).toString(),
+            {
+                headers:        { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
+                validateStatus: () => true
+            }
+        );
 
-            if (files.length > 0) {
-                const videoFiles = files.filter(f => f.name.match(/\.(mkv|mp4|avi|webm)$/i));
-                
-                if (videoFiles.length === 1) {
-                    fileId = videoFiles[0].id;
-                } else if (videoFiles.length > 1) {
-                    if (isBatch) {
-                        if (arcName === 'Dressrosa') {
-                            videoFiles.sort((a, b) => a.name.localeCompare(b.name)); 
-                            const targetIndex = episode - 1; 
-                            if (targetIndex >= 0 && targetIndex < videoFiles.length) {
-                                fileId = videoFiles[targetIndex].id;
-                            }
-                        } else {
-                            // FIX: Cleaned up escape sequences in RegExp (`\d` instead of `\\\\d`)
-                            const regEp = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
-                            fileId = videoFiles.find(f => regEp.test(f.name.toLowerCase()))?.id || videoFiles[0].id;
+        const torrentId = createRes.data?.data?.torrent_id
+                       || createRes.data?.data?.id;
+
+        if (!torrentId) {
+            console.error("No torrent_id in createtorrent response:", JSON.stringify(createRes.data));
+            return { streams: [] };
+        }
+
+        // ── Fetch file list ──────────────────────────────────────────
+        const mylistRes = await axios.get(
+            'https://api.torbox.app/v1/api/torrents/mylist',
+            { params: { id: torrentId }, headers }
+        );
+
+        // FIX 3: Torbox may return data as an array or a single object.
+        // Normalise to a single torrent object before reading .files.
+        const rawData    = mylistRes.data?.data;
+        const torrentObj = Array.isArray(rawData) ? rawData[0] : rawData;
+        const files      = torrentObj?.files || [];
+
+        let fileId = null;
+
+        if (files.length > 0) {
+            const videoFiles = files.filter(f => /\.(mkv|mp4|avi|webm)$/i.test(f.name));
+
+            if (videoFiles.length === 1) {
+                fileId = videoFiles[0].id;
+            } else if (videoFiles.length > 1) {
+                if (isBatch) {
+                    if (arcName === 'Dressrosa') {
+                        videoFiles.sort((a, b) => a.name.localeCompare(b.name));
+                        const targetIndex = episode - 1;
+                        if (targetIndex >= 0 && targetIndex < videoFiles.length) {
+                            fileId = videoFiles[targetIndex].id;
                         }
                     } else {
-                        // FIX: For Individual Releases with multiple video tracks (like extras/openings), pick the largest file
-                        videoFiles.sort((a, b) => b.size - a.size);
-                        fileId = videoFiles[0].id;
+                        const regEp = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
+                        fileId = videoFiles.find(f => regEp.test(f.name))?.id
+                              || videoFiles[0].id;
                     }
+                } else {
+                    // Multiple files in a single-episode torrent → pick the largest (main video, not extras)
+                    videoFiles.sort((a, b) => b.size - a.size);
+                    fileId = videoFiles[0].id;
                 }
             }
+        }
 
-            // FIX: The /requestdl endpoint STRICTLY requires the API key passed via the `token` URL param, NOT the header
-            const dlParams = { 
-                token: TORBOX_API_KEY, 
-                torrent_id: torrentId 
+        // ── Request download link ────────────────────────────────────
+        // /requestdl REQUIRES the API key as the `token` query param, not just the Bearer header
+        const dlParams = { token: TORBOX_API_KEY, torrent_id: torrentId };
+        if (fileId !== null) dlParams.file_id = fileId;
+
+        const dlRes = await axios.get(
+            'https://api.torbox.app/v1/api/torrents/requestdl',
+            { params: dlParams, headers }
+        );
+
+        if (dlRes.data?.success && dlRes.data?.data) {
+            return {
+                streams: [{
+                    name:  'Torbox\n[READY]',
+                    title: `${torrentTitle}\n⚡ Stream Ready`,
+                    url:   dlRes.data.data
+                }]
             };
-            if (fileId !== null) dlParams.file_id = fileId;
+        }
 
-            const dlRes = await axios.get(`https://api.torbox.app/v1/api/torrents/requestdl`, {
-                params: dlParams, 
-                headers
-            });
+        console.error("requestdl did not return a URL:", JSON.stringify(dlRes.data));
+        return { streams: [] };
 
-            if (dlRes.data?.success && dlRes.data?.data) {
-                return {
-                    streams: [{
-                        name: 'Torbox\n[READY]',
-                        title: `${torrentTitle}\n⚡ Stream Target Initialized`,
-                        url: dlRes.data.data
-                    }]
-                };
-            }
-        } 
-        
-        // Uncached Fallback Route
-        return {
-            streams: [{
-                name: 'Torbox\n[DOWNLOADING]',
-                title: `Caching... Check back later.\nTorbox caching engine processing: ${arcName} ${epPad}`,
-                url: "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-            }]
-        };
-        
     } catch (error) {
-        console.error("Torbox Pipeline Failure:", error.message);
+        console.error("Torbox Pipeline Failure:", error.response?.data ?? error.message);
         return { streams: [] };
     }
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('Standalone One Pace Catalog Addon v3.5.2 active on port 7000');
+console.log('One Pace Torbox Addon v3.6.0 active on port', process.env.PORT || 7000);
