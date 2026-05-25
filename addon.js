@@ -82,7 +82,6 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
 
     try {
-        // FIXED: Clean keyword terms without literal double quotes
         const qIndiv = `One Pace ${arcName} ${epPad}`;
         const qBatch = `One Pace ${arcName}`;
 
@@ -109,16 +108,13 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
             let matchesEpisode = false;
 
             if (isBatch) {
-                // Handle multi-part arc mapping safely
                 if (arcName === 'Wano') {
                     if (episode <= 12 && titleLower.includes('act 1')) matchesEpisode = true;
                     else if (episode >= 13 && episode <= 30 && titleLower.includes('act 2')) matchesEpisode = true;
                 } else {
-                    // Standard arcs release a single batch for the entire arc
                     matchesEpisode = true;
                 }
             } else {
-                // Individual episode number validation via strict word boundary
                 const epRegex = new RegExp(`(?<!\\d)${epPad}(?!\\d)`);
                 if (epRegex.test(item.title)) {
                     matchesEpisode = true;
@@ -202,7 +198,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let season = parseInt(parts[2], 10);
     let episode = parseInt(parts[3], 10);
 
-    // --- STREMIO UI INVERSION PROTECTION SHIELD ---
+    // Inversion Protection Shield
     if (season <= ARCS.length && episode <= ARCS.length) {
         const standardMax = ARCS[season - 1] ? ARCS[season - 1].eps : 0;
         const swappedMax = ARCS[episode - 1] ? ARCS[episode - 1].eps : 0;
@@ -217,7 +213,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         season = episode;
         episode = temp;
     }
-    // ----------------------------------------------
 
     if (season < 1 || season > ARCS.length) return { streams: [] };
 
@@ -234,6 +229,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     try {
         const headers = { Authorization: `Bearer ${TORBOX_API_KEY}` };
 
+        // 1. Check Cache
         const cacheRes = await axios.get(`https://api.torbox.app/v1/api/torrents/checkcached`, {
             params: { hash: infoHash, format: 'list' }, headers
         });
@@ -242,65 +238,81 @@ builder.defineStreamHandler(async ({ type, id }) => {
                          cacheRes.data?.data?.[infoHash] === true || 
                          (Array.isArray(cacheRes.data?.data) && cacheRes.data.data.includes(infoHash));
 
-        const createRes = await axios.post('https://api.torbox.app/v1/api/torrents/createtorrent', { magnet }, { headers });
+        // 2. Create Torrent using URLSearchParams to mimic form-data
+        const createRes = await axios.post(
+            'https://api.torbox.app/v1/api/torrents/createtorrent', 
+            new URLSearchParams({ magnet: magnet }).toString(), 
+            { headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
 
         if (!createRes.data || !createRes.data.success) return { streams: [] };
 
-        const torrentId = createRes.data.data.torrent_id;
+        const torrentId = createRes.data?.data?.torrent_id || createRes.data?.data?.id;
 
-        if (isCached) {
+        if (isCached && torrentId) {
             let fileId = null;
-            const torrentData = createRes.data?.data;
-            
-            if (isBatch && torrentData?.files && torrentData.files.length > 0) {
-                const videoFiles = torrentData.files.filter(f => f.name.match(/\.(mkv|mp4|avi)$/i));
-                
-                if (arcName === 'Dressrosa') {
-                    videoFiles.sort((a, b) => a.name.localeCompare(b.name)); 
-                    const targetIndex = episode - 1; 
-                    if (targetIndex >= 0 && targetIndex < videoFiles.length) {
-                        fileId = videoFiles[targetIndex].id;
+
+            // 3. Query /mylist to get the files inside the torrent
+            const mylistRes = await axios.get(`https://api.torbox.app/v1/api/torrents/mylist?id=${torrentId}`, { headers });
+            const files = mylistRes.data?.data?.files || [];
+
+            if (files.length > 0) {
+                const videoFiles = files.filter(f => f.name.match(/\.(mkv|mp4|avi)$/i));
+
+                if (isBatch) {
+                    if (arcName === 'Dressrosa') {
+                        videoFiles.sort((a, b) => a.name.localeCompare(b.name)); 
+                        const targetIndex = episode - 1; 
+                        if (targetIndex >= 0 && targetIndex < videoFiles.length) {
+                            fileId = videoFiles[targetIndex].id;
+                        }
+                    } else {
+                        fileId = videoFiles.find(f => {
+                            const name = f.name.toLowerCase();
+                            const regEp = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
+                            return regEp.test(name);
+                        })?.id || null;
                     }
                 } else {
-                    fileId = videoFiles.find(f => {
-                        const name = f.name.toLowerCase();
-                        const regEp = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
-                        return regEp.test(name);
-                    })?.id || null;
+                    // 4. Individual Releases File Logic: Find largest video file
+                    if (videoFiles.length > 0) {
+                        videoFiles.sort((a, b) => b.size - a.size);
+                        fileId = videoFiles[0].id; 
+                    }
                 }
             }
 
-            const dlParams = { torrent_id: torrentId };
-            if (fileId) dlParams.file_id = fileId;
+            // 5. Request DL Link
+            if (fileId !== null) {
+                const dlRes = await axios.get(`https://api.torbox.app/v1/api/torrents/requestdl`, {
+                    params: { torrent_id: torrentId, file_id: fileId }, headers
+                });
 
-            const dlRes = await axios.get(`https://api.torbox.app/v1/api/torrents/requestdl`, {
-                params: dlParams, headers
-            });
-
-            if (dlRes.data?.success) {
-                return {
-                    streams: [{
-                        name: 'Torbox\n[READY]',
-                        title: `${torrentTitle}\n⚡ Stream Target Initialized`,
-                        url: dlRes.data.data
-                    }]
-                };
+                if (dlRes.data?.success) {
+                    return {
+                        streams: [{
+                            name: 'Torbox\n[READY]',
+                            title: `${torrentTitle}\n⚡ Stream Target Initialized`,
+                            url: dlRes.data.data
+                        }]
+                    };
+                }
             }
-        } else {
-            return {
-                streams: [{
-                    name: 'Torbox\n[DOWNLOADING]',
-                    title: `Caching... Check back later.\nTorbox caching engine processing: ${arcName} ${epPad}`,
-                    url: "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-                }]
-            };
-        }
+        } 
+        
+        // 6. If not cached or the pipeline fails to secure a link, return downloading placeholder
+        return {
+            streams: [{
+                name: 'Torbox\n[DOWNLOADING]',
+                title: `Caching... Check back later.\nTorbox caching engine processing: ${arcName} ${epPad}`,
+                url: "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+            }]
+        };
+        
     } catch (error) {
         console.error("Torbox Pipeline Failure:", error.message);
         return { streams: [] };
     }
-
-    return { streams: [] };
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
