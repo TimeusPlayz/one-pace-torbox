@@ -1,7 +1,7 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// Decoupled Arc Map: Includes explicit Nyaa search phrases (q) and flexible validation match terms (m)
+// Decoupled Arc Map
 const ARCS = [
     { name: "Romance Dawn", eps: 4, q: "Romance Dawn", m: ["romance dawn"] },
     { name: "Orange Town", eps: 3, q: "Orange Town", m: ["orange town"] },
@@ -43,7 +43,7 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '4.3.1',
+    version: '4.3.2',
     name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series. Complete site-wide legacy arc coverage with standard & alternate stream slot logic.',
     types: ['series'],
@@ -93,7 +93,6 @@ const getMatchingReleases = async (arc, episode) => {
 
         let allItems = [];
 
-        // FIX 1: Fetch sequentially with a delay to prevent Cloudflare 429/403 blocks
         try {
             const resBatch = await axios.get(`${baseUrl}&q=${encodeURIComponent(qBatch)}`, { headers });
             allItems.push(...parseRSS(resBatch.data));
@@ -101,7 +100,7 @@ const getMatchingReleases = async (arc, episode) => {
             console.error(`Batch fetch failed: ${e.message}`);
         }
 
-        await new Promise(r => setTimeout(r, 600)); // Respect Nyaa limits
+        await new Promise(r => setTimeout(r, 600)); 
 
         try {
             const resIndiv = await axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers });
@@ -118,22 +117,22 @@ const getMatchingReleases = async (arc, episode) => {
             uniqueLinks.add(item.link);
 
             const titleLower = item.title.toLowerCase();
-            
             if (!titleLower.includes('one pace') && !titleLower.includes('onepace')) continue;
             
             const matchesArcName = arc.m.some(term => titleLower.includes(term));
             if (!matchesArcName) continue;
 
-            // FIX 2: Added patch for "Act/Batch 1" and "04v2" logic bugs
+            // FIX 4: Strips original chapter/episode mappings out of brackets e.g., [8-11]
             let cleanTitle = item.title
                 .replace(/\[[a-fA-F0-9]{8}\]/g, '')               
+                .replace(/[\(\[][\d\s\-~,&]+[\)\]]/g, '')         
                 .replace(/\b(2160|1080|720|480|576)[pP]?\b/g, '')  
                 .replace(/\b10bit\b/gi, '')
                 .replace(/\bx26[45]\b/gi, '')
-                .replace(/v\d{1,2}\b/gi, '') // Properly strips things like 04v2                       
+                .replace(/v\d{1,2}\b/gi, '')                        
                 .replace(/\bg\d+\b/gi, '')
                 .replace(/\[?one\s*pace\]?/gi, '')
-                .replace(/\b(act|part|batch|vol|chapter|ch)\s*\d+\b/gi, ''); // Prevents text like "Batch 1" from locking out episodes > 1
+                .replace(/\b(act|part|batch|vol|chapter|ch)\s*\d+\b/gi, ''); 
 
             const rangeMatch = cleanTitle.match(/(?<!\d)(\d{1,3})\s*[-~]\s*(\d{1,3})(?!\d)/);
             let matchesEpisode = false;
@@ -329,7 +328,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 let fileId = null;
 
                 if (files.length > 0) {
-                    // FIX 3: Filter out non-episode theme song and promo files to prevent false positives in batch fallback
                     const videoFiles = files.filter(f => 
                         f.name.match(/\.(mkv|mp4|avi|webm)$/i) &&
                         !f.name.match(/(NCED|NCOP|Creditless|Trailer|Promo|Bonus)/i)
@@ -346,13 +344,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             } else {
                                 const regEp = new RegExp("(?<!\\d)0*" + episode + "(?!\\d)");
                                 const matchedFile = videoFiles.find(f => {
+                                    // FIX 4 continued: Keep file matcher synced with Nyaa title matcher
                                     const cleanFileName = f.name
                                         .replace(/\[[a-fA-F0-9]{8}\]/g, '')
+                                        .replace(/[\(\[][\d\s\-~,&]+[\)\]]/g, '')
                                         .replace(/\b(2160|1080|720|480|576)[pP]?\b/g, '')
-                                        .replace(/v\d{1,2}\b/gi, '') // Matching v4.3.1 logic
+                                        .replace(/\b10bit\b/gi, '')
+                                        .replace(/\bx26[45]\b/gi, '')
+                                        .replace(/v\d{1,2}\b/gi, '') 
                                         .replace(/\bg\d+\b/gi, '')
                                         .replace(/\[?one\s*pace\]?/gi, '')
-                                        .replace(/\[\d+\]/g, '')
                                         .replace(/\b(act|part|batch|vol|chapter|ch)\s*\d+\b/gi, ''); 
                                     return regEp.test(cleanFileName);
                                 });
@@ -404,4 +405,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v4.3.1 active on port 7000');
+console.log('One Pace Torbox Addon v4.3.2 active on port 7000');
