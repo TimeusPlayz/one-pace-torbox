@@ -42,7 +42,7 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '3.3.0',
+    version: '3.4.0',
     name: 'One Pace - Torbox Elite',
     description: 'Standalone One Pace series mapped chronologically via Torbox with absolute stream alignment.',
     types: ['series'],
@@ -77,16 +77,14 @@ const parseRSS = (xmlText) => {
     return items;
 };
 
-// Intelligent Title Classifier to determine if a torrent is a Batch vs Individual
 const checkIsBatch = (title, arcName) => {
     const titleLower = title.toLowerCase();
     if (titleLower.includes('batch')) return true;
     if (/\[\d+-\d+\]/.test(title) || /\d+-\d+/.test(title)) return true;
     if (titleLower.includes('act 1') || titleLower.includes('act 2')) return true;
     
-    // If it mentions the arc but has no single standalone episode suffix, it is a batch container
-    const escapedArc = arcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const individualRegex = new RegExp(`${escapedArc}\\s+\\d+`, 'i');
+    const EastonArc = arcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const individualRegex = new RegExp(`${EastonArc}\\s+\\d+`, 'i');
     if (!individualRegex.test(title) && titleLower.includes(arcName.toLowerCase())) {
         return true;
     }
@@ -98,7 +96,6 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
 
     try {
-        // Clean keyword queries allowing flexible layout matching
         const qIndiv = `One Pace ${arcName} ${epPad}`;
         let qBatch = `One Pace ${arcName}`;
         let batchArcName = arcName;
@@ -210,8 +207,25 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (type !== 'series' || !id.startsWith('onepace:1:')) return { streams: [] };
 
     const parts = id.split(':');
-    const season = parseInt(parts[2], 10);
-    const episode = parseInt(parts[3], 10);
+    let season = parseInt(parts[2], 10);
+    let episode = parseInt(parts[3], 10);
+
+    // --- STREMIO UI INVERSION PROTECTION SHIELD ---
+    if (season <= ARCS.length && episode <= ARCS.length) {
+        const standardMax = ARCS[season - 1] ? ARCS[season - 1].eps : 0;
+        const swappedMax = ARCS[episode - 1] ? ARCS[episode - 1].eps : 0;
+        
+        if (episode > standardMax && season <= swappedMax) {
+            const temp = season;
+            season = episode;
+            episode = temp;
+        }
+    } else if (season > ARCS.length && episode <= ARCS.length) {
+        const temp = season;
+        season = episode;
+        episode = temp;
+    }
+    // ----------------------------------------------
 
     if (season < 1 || season > ARCS.length) return { streams: [] };
 
@@ -256,7 +270,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         fileId = videoFiles[targetIndex].id;
                     }
                 } else {
-                    // Safe numeric lookbehind boundary selector to strictly match the file token inside the batch
                     fileId = videoFiles.find(f => {
                         const name = f.name.toLowerCase();
                         const regEp = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
@@ -299,4 +312,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('Standalone One Pace Catalog Addon v3.3 active on port 7000');
+console.log('Standalone One Pace Catalog Addon v3.4 active on port 7000');
