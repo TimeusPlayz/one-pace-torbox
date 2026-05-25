@@ -1,7 +1,7 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// We now define the max number of episodes per arc so Stremio can build the UI
+// Updated with your accurate episode counts
 const ARCS = [
     { name: "Romance Dawn", eps: 4 },
     { name: "Orange Town", eps: 3 },
@@ -38,14 +38,14 @@ const ARCS = [
     { name: "Whole Cake Island", eps: 39 },
     { name: "Reverie", eps: 3 },
     { name: "Wano", eps: 90 },
-    { name: "Egghead", eps: 35 } // Padded extra for future ongoing releases
+    { name: "Egghead", eps: 35 } 
 ];
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '3.0.0',
-    name: 'One Pace - Torbox',
-    description: 'Standalone One Pace series mapped chronologically via Torbox.',
+    version: '3.2.0',
+    name: 'One Pace - Torbox Elite',
+    description: 'Standalone One Pace series mapped chronologically via Torbox with Wano/Dressrosa fixes.',
     types: ['series'],
     catalogs: [{
         type: 'series',
@@ -58,7 +58,6 @@ const builder = new addonBuilder({
 
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// RSS Parser
 const parseRSS = (xmlText) => {
     const items = [];
     const itemRegex = /<item>([\s\S]*?)<\/item>/g;
@@ -79,46 +78,55 @@ const parseRSS = (xmlText) => {
     return items;
 };
 
-// Chronological Priority Engine
-const fetchChronologicalRelease = async (arcName, epPad) => {
+// Now includes the 'episode' argument for the Wano Act logic
+const fetchChronologicalRelease = async (arcName, epPad, episode) => {
     const baseUrl = 'https://nyaa.si/?page=rss&u=Galaxy9000';
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
 
     try {
         const qIndiv = `"One Pace" "${arcName} ${epPad}"`;
-        const qBatch = `"One Pace" "${arcName}"`;
+        let qBatch = `"One Pace" "${arcName}"`;
+        let batchArcName = arcName;
 
-        const [resIndiv, resBatch] = await Promise.all([
-            axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers }),
-            axios.get(`${baseUrl}&q=${encodeURIComponent(qBatch)}`, { headers })
-        ]);
+        // Wano Act Splitter Logic
+        if (arcName === 'Wano') {
+            if (episode <= 12) {
+                batchArcName = 'Wano Act 1';
+                qBatch = `"One Pace" "Wano Act 1"`;
+            } else if (episode <= 30) {
+                batchArcName = 'Wano Act 2';
+                qBatch = `"One Pace" "Wano Act 2"`;
+            } else {
+                qBatch = null; // Act 3+ is unbatched, skip batch searching
+            }
+        }
 
-        const itemsIndiv = parseRSS(resIndiv.data);
-        const itemsBatch = parseRSS(resBatch.data);
+        const promises = [axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers })];
+        if (qBatch) {
+            promises.push(axios.get(`${baseUrl}&q=${encodeURIComponent(qBatch)}`, { headers }));
+        }
+
+        const responses = await Promise.all(promises);
+        const itemsIndiv = parseRSS(responses[0].data);
+        const itemsBatch = qBatch ? parseRSS(responses[1].data) : [];
 
         let candidates = [];
 
         for (const item of itemsIndiv) {
             candidates.push({
-                title: item.title,
-                magnet: item.link,
-                pubDate: item.pubDate,
-                isBatch: false,
-                isExtended: /extended/i.test(item.title)
+                title: item.title, magnet: item.link, pubDate: item.pubDate,
+                isBatch: false, isExtended: /extended/i.test(item.title)
             });
         }
 
-        const escapedArc = arcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escapedArc = batchArcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const batchRegex = new RegExp(`\\[One\\s+Pace\\]\\[\\d+[-迎,\\d]*\\]\\s*${escapedArc}\\s*\\[`, 'i');
 
         for (const item of itemsBatch) {
             if (batchRegex.test(item.title)) {
                 candidates.push({
-                    title: item.title,
-                    magnet: item.link,
-                    pubDate: item.pubDate,
-                    isBatch: true,
-                    isExtended: /extended/i.test(item.title)
+                    title: item.title, magnet: item.link, pubDate: item.pubDate,
+                    isBatch: true, isExtended: /extended/i.test(item.title)
                 });
             }
         }
@@ -126,9 +134,7 @@ const fetchChronologicalRelease = async (arcName, epPad) => {
         if (candidates.length === 0) return null;
 
         const extendedPool = candidates.filter(c => c.isExtended);
-        if (extendedPool.length > 0) {
-            candidates = extendedPool;
-        }
+        if (extendedPool.length > 0) candidates = extendedPool;
 
         const batches = candidates.filter(c => c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
         const individuals = candidates.filter(c => !c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
@@ -137,4 +143,149 @@ const fetchChronologicalRelease = async (arcName, epPad) => {
             if (individuals[0].pubDate > batches[0].pubDate) return individuals[0];
             return batches[0];
         } else if (batches.length > 0) {
-            return batches
+            return batches[0];
+        } else if (individuals.length > 0) {
+            return individuals[0];
+        }
+    } catch (error) {
+        console.error("Nyaa Chrono Processing Error:", error.message);
+    }
+    return null;
+};
+
+builder.defineCatalogHandler(({ type, id }) => {
+    if (type === 'series' && id === 'onepace_catalog') {
+        return Promise.resolve({
+            metas: [{
+                id: 'onepace:1', type: 'series', name: 'One Pace',
+                poster: 'https://artworks.thetvdb.com/banners/posters/329606-1.jpg',
+                description: 'One Pace recuts the One Piece anime to bring it more in line with the manga.'
+            }]
+        });
+    }
+    return Promise.resolve({ metas: [] });
+});
+
+builder.defineMetaHandler(({ type, id }) => {
+    if (type === 'series' && id === 'onepace:1') {
+        const videos = [];
+        ARCS.forEach((arc, index) => {
+            const season = index + 1;
+            for (let ep = 1; ep <= arc.eps; ep++) {
+                videos.push({
+                    id: `onepace:1:${season}:${ep}`,
+                    title: `${arc.name} ${ep}`,
+                    season: season, episode: ep,
+                    released: new Date().toISOString()
+                });
+            }
+        });
+        return Promise.resolve({
+            meta: {
+                id: 'onepace:1', type: 'series', name: 'One Pace',
+                poster: 'https://artworks.thetvdb.com/banners/posters/329606-1.jpg',
+                background: 'https://artworks.thetvdb.com/banners/fanart/original/329606-2.jpg',
+                description: 'One Pace recuts the One Piece anime to bring it more in line with the manga.',
+                videos: videos
+            }
+        });
+    }
+    return Promise.resolve({ meta: {} });
+});
+
+builder.defineStreamHandler(async ({ type, id }) => {
+    if (type !== 'series' || !id.startsWith('onepace:1:')) return { streams: [] };
+
+    const parts = id.split(':');
+    const season = parseInt(parts[2], 10);
+    const episode = parseInt(parts[3], 10);
+
+    if (season < 1 || season > ARCS.length) return { streams: [] };
+
+    const arcName = ARCS[season - 1].name;
+    const epPad = episode.toString().padStart(2, '0');
+
+    // Passing the raw episode number into the chronological fetcher
+    const bestRelease = await fetchChronologicalRelease(arcName, epPad, episode);
+    if (!bestRelease) return { streams: [] };
+
+    const { magnet, isBatch, title: torrentTitle } = bestRelease;
+    const infoHash = magnet.match(/urn:btih:([a-zA-Z0-9]+)/)?.[1]?.toLowerCase();
+    if (!infoHash) return { streams: [] };
+
+    try {
+        const headers = { Authorization: `Bearer ${TORBOX_API_KEY}` };
+
+        const cacheRes = await axios.get(`https://api.torbox.app/v1/api/torrents/checkcached`, {
+            params: { hash: infoHash, format: 'list' }, headers
+        });
+        
+        const isCached = cacheRes.data?.data === true || 
+                         cacheRes.data?.data?.[infoHash] === true || 
+                         (Array.isArray(cacheRes.data?.data) && cacheRes.data.data.includes(infoHash));
+
+        const createRes = await axios.post('https://api.torbox.app/v1/api/torrents/createtorrent', { magnet }, { headers });
+
+        if (!createRes.data || !createRes.data.success) return { streams: [] };
+
+        const torrentId = createRes.data.data.torrent_id;
+
+        if (isCached) {
+            let fileId = null;
+            const torrentData = createRes.data?.data;
+            
+            if (isBatch && torrentData?.files && torrentData.files.length > 0) {
+                // Filter out non-video fluff
+                const videoFiles = torrentData.files.filter(f => f.name.match(/\.(mkv|mp4|avi)$/i));
+                
+                if (arcName === 'Dressrosa') {
+                    // Dressrosa Alphabetical Indexing bypass
+                    videoFiles.sort((a, b) => a.name.localeCompare(b.name)); 
+                    const targetIndex = episode - 1; 
+                    if (targetIndex >= 0 && targetIndex < videoFiles.length) {
+                        fileId = videoFiles[targetIndex].id;
+                    }
+                } else {
+                    const fileMatch = videoFiles.find(f => {
+                        const name = f.name.toLowerCase();
+                        return name.includes(` ${epPad} `) || name.includes(`${epPad}.mkv`) || name.includes(`_${epPad}`);
+                    });
+                    if (fileMatch) fileId = fileMatch.id;
+                }
+            }
+
+            const dlParams = { torrent_id: torrentId };
+            if (fileId) dlParams.file_id = fileId;
+
+            const dlRes = await axios.get(`https://api.torbox.app/v1/api/torrents/requestdl`, {
+                params: dlParams, headers
+            });
+
+            if (dlRes.data?.success) {
+                return {
+                    streams: [{
+                        name: 'Torbox\n[READY]',
+                        title: `${torrentTitle}\n⚡ Stream Target Initialized`,
+                        url: dlRes.data.data
+                    }]
+                };
+            }
+        } else {
+            return {
+                streams: [{
+                    name: 'Torbox\n[DOWNLOADING]',
+                    title: `Caching... Check back later.\nTorbox caching engine processing: ${arcName} ${epPad}`,
+                    url: "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+                }]
+            };
+        }
+    } catch (error) {
+        console.error("Torbox Pipeline Failure:", error.message);
+        return { streams: [] };
+    }
+
+    return { streams: [] };
+});
+
+serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
+console.log('Standalone One Pace Catalog Addon v3.2 active on port 7000');
