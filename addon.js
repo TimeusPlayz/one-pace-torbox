@@ -42,7 +42,7 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '3.6.2',
+    version: '3.6.3',
     name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series mapped chronologically via Torbox with absolute stream alignment.',
     types: ['series'],
@@ -56,6 +56,19 @@ const builder = new addonBuilder({
 });
 
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
+
+// String Sanitizer to prevent Hash and Version (v2) collisions
+const cleanString = (str) => {
+    return str
+        .replace(/\[.*?\]/g, '')      // Strip brackets [1080p], [Hashes], [One Pace]
+        .replace(/\(.*?\)/g, '')      // Strip parentheses (Chapter 700)
+        .replace(/\bv\d\b/gi, '')     // Strip version numbers like v2, v3
+        .replace(/\b\d{3,4}p\b/gi, '')// Strip resolutions
+        .replace(/\b10bit\b/gi, '')   // Strip 10bit
+        .replace(/\bx26[45]\b/gi, '') // Strip codecs
+        .trim()
+        .toLowerCase();
+};
 
 const parseRSS = (xmlText) => {
     const items = [];
@@ -108,22 +121,12 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
             const titleLower = item.title.toLowerCase();
             if (!titleLower.includes('one pace') || !titleLower.includes(arcName.toLowerCase())) continue;
 
-            // Intelligent Batch Detection Engine
+            const safeTitle = cleanString(item.title);
             let isBatch = titleLower.includes('batch') || /\b\d{1,3}\s*-\s*\d{1,3}\b/.test(titleLower);
 
             if (!isBatch) {
-                // Strip resolutions, codecs, years, and bracket tags to isolate true numbers
-                const cleanTitle = titleLower
-                    .replace(/\b\d{3,4}p\b/g, '') 
-                    .replace(/\bx26[45]\b/g, '') 
-                    .replace(/\b10bit\b/g, '') 
-                    .replace(/\b(?:19|20)\d{2}\b/g, '') 
-                    .replace(/\[.*?\]/g, '') 
-                    .replace(/\(.*?\)/g, '') 
-                    .trim();
-
-                // If the cleaned title has NO standalone numbers, it is inherently a full arc batch
-                const hasStandaloneNumber = /\b\d{1,3}\b/.test(cleanTitle);
+                // If the safely cleaned title has NO standalone numbers, it is inherently a full arc batch
+                const hasStandaloneNumber = /\b\d{1,3}\b/.test(safeTitle);
                 if (!hasStandaloneNumber) {
                     isBatch = true;
                 }
@@ -140,9 +143,8 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
                     matchesEpisode = true;
                 }
             } else {
-                // Flexible regex to allow "1" to match "01" transparently
                 const epRegex = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
-                if (epRegex.test(item.title)) {
+                if (epRegex.test(safeTitle)) {
                     matchesEpisode = true;
                 }
             }
@@ -163,7 +165,6 @@ const fetchChronologicalRelease = async (arcName, epPad, episode) => {
         const batches = candidates.filter(c => c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
         const individuals = candidates.filter(c => !c.isBatch).sort((a, b) => b.pubDate - a.pubDate);
 
-        // Priority Fallback Logic
         if (batches.length > 0 && individuals.length > 0) {
             if (individuals[0].pubDate > batches[0].pubDate) return individuals[0];
             return batches[0];
@@ -309,8 +310,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 fileId = videoFiles[targetIndex].id;
                             }
                         } else {
+                            // Apply the safe string sanitizer before executing the match
                             const regEp = new RegExp(`(?<!\\d)0*${episode}(?!\\d)`);
-                            fileId = videoFiles.find(f => regEp.test(f.name.toLowerCase()))?.id || videoFiles[0].id;
+                            fileId = videoFiles.find(f => regEp.test(cleanString(f.name)))?.id || videoFiles[0].id;
                         }
                     } else {
                         videoFiles.sort((a, b) => b.size - a.size);
@@ -366,4 +368,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v3.6.2 active on port 7000');
+console.log('One Pace Torbox Addon v3.6.3 active on port 7000');
