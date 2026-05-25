@@ -43,7 +43,7 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '4.3.0',
+    version: '4.3.1',
     name: 'One Pace - Torbox Premium',
     description: 'Standalone One Pace series. Complete site-wide legacy arc coverage with standard & alternate stream slot logic.',
     types: ['series'],
@@ -58,7 +58,6 @@ const builder = new addonBuilder({
 
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// Corrected parseRSS to extract infoHash natively instead of hallucinated tags
 const parseRSS = (xmlText) => {
     const items = [];
     const itemRegex = /<item>([\s\S]*?)<\/item>/g;
@@ -84,24 +83,32 @@ const parseRSS = (xmlText) => {
 };
 
 const getMatchingReleases = async (arc, episode) => {
-    // Removed specific uploader and category limits to search site-wide for all legacy group files
     const baseUrl = 'https://nyaa.si/?page=rss'; 
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
     const epPad = episode.toString().padStart(2, '0');
 
     try {
-        // Broadened search to 'Pace' instead of 'One Pace' to catch both "[One Pace]" and legacy "[OnePace]" tags
         const qIndiv = `Pace ${arc.q} ${epPad}`;
         const qBatch = `Pace ${arc.q}`;
 
-        const [resIndiv, resBatch] = await Promise.all([
-            axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers }),
-            axios.get(`${baseUrl}&q=${encodeURIComponent(qBatch)}`, { headers })
-        ]);
+        let allItems = [];
 
-        const itemsIndiv = parseRSS(resIndiv.data);
-        const itemsBatch = parseRSS(resBatch.data);
-        const allItems = [...itemsIndiv, ...itemsBatch];
+        // FIX 1: Fetch sequentially with a delay to prevent Cloudflare 429/403 blocks
+        try {
+            const resBatch = await axios.get(`${baseUrl}&q=${encodeURIComponent(qBatch)}`, { headers });
+            allItems.push(...parseRSS(resBatch.data));
+        } catch (e) {
+            console.error(`Batch fetch failed: ${e.message}`);
+        }
+
+        await new Promise(r => setTimeout(r, 600)); // Respect Nyaa limits
+
+        try {
+            const resIndiv = await axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers });
+            allItems.push(...parseRSS(resIndiv.data));
+        } catch (e) {
+            console.error(`Indiv fetch failed: ${e.message}`);
+        }
 
         const uniqueLinks = new Set();
         const matchedReleases = [];
@@ -117,14 +124,16 @@ const getMatchingReleases = async (arc, episode) => {
             const matchesArcName = arc.m.some(term => titleLower.includes(term));
             if (!matchesArcName) continue;
 
+            // FIX 2: Added patch for "Act/Batch 1" and "04v2" logic bugs
             let cleanTitle = item.title
                 .replace(/\[[a-fA-F0-9]{8}\]/g, '')               
                 .replace(/\b(2160|1080|720|480|576)[pP]?\b/g, '')  
                 .replace(/\b10bit\b/gi, '')
                 .replace(/\bx26[45]\b/gi, '')
-                .replace(/\bv\d\b/gi, '')                         
+                .replace(/v\d{1,2}\b/gi, '') // Properly strips things like 04v2                       
                 .replace(/\bg\d+\b/gi, '')
-                .replace(/\[?one\s*pace\]?/gi, ''); // Clean the tag itself out
+                .replace(/\[?one\s*pace\]?/gi, '')
+                .replace(/\b(act|part|batch|vol|chapter|ch)\s*\d+\b/gi, ''); // Prevents text like "Batch 1" from locking out episodes > 1
 
             const rangeMatch = cleanTitle.match(/(?<!\d)(\d{1,3})\s*[-~]\s*(\d{1,3})(?!\d)/);
             let matchesEpisode = false;
@@ -320,7 +329,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 let fileId = null;
 
                 if (files.length > 0) {
-                    const videoFiles = files.filter(f => f.name.match(/\.(mkv|mp4|avi|webm)$/i));
+                    // FIX 3: Filter out non-episode theme song and promo files to prevent false positives in batch fallback
+                    const videoFiles = files.filter(f => 
+                        f.name.match(/\.(mkv|mp4|avi|webm)$/i) &&
+                        !f.name.match(/(NCED|NCOP|Creditless|Trailer|Promo|Bonus)/i)
+                    );
                     
                     if (videoFiles.length === 1) {
                         fileId = videoFiles[0].id;
@@ -336,10 +349,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                     const cleanFileName = f.name
                                         .replace(/\[[a-fA-F0-9]{8}\]/g, '')
                                         .replace(/\b(2160|1080|720|480|576)[pP]?\b/g, '')
-                                        .replace(/\bv\d\b/gi, '')
+                                        .replace(/v\d{1,2}\b/gi, '') // Matching v4.3.1 logic
                                         .replace(/\bg\d+\b/gi, '')
                                         .replace(/\[?one\s*pace\]?/gi, '')
-                                        .replace(/\[\d+\]/g, ''); // Safely drops stray bracket numbers that aren't ep counts
+                                        .replace(/\[\d+\]/g, '')
+                                        .replace(/\b(act|part|batch|vol|chapter|ch)\s*\d+\b/gi, ''); 
                                     return regEp.test(cleanFileName);
                                 });
                                 fileId = matchedFile ? matchedFile.id : videoFiles[0].id;
@@ -390,4 +404,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v4.3.0 active on port 7000');
+console.log('One Pace Torbox Addon v4.3.1 active on port 7000');
