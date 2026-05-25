@@ -1,50 +1,51 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
+// Decoupled Arc Map: Includes explicit Nyaa search phrases (q) and flexible validation match terms (m)
 const ARCS = [
-    { name: "Romance Dawn", eps: 4 },
-    { name: "Orange Town", eps: 3 },
-    { name: "Syrup Village", eps: 7 },
-    { name: "Gaimon", eps: 1 },
-    { name: "Baratie", eps: 9 },
-    { name: "Arlong Park", eps: 10 },
-    { name: "The Adventures of Buggy's Crew", eps: 1 },
-    { name: "Loguetown", eps: 3 },
-    { name: "Reverse Mountain", eps: 2 },
-    { name: "Whiskey Peak", eps: 2 },
-    { name: "The Trials of Koby-Meppo", eps: 1 },
-    { name: "Little Garden", eps: 5 },
-    { name: "Drum Island", eps: 8 },
-    { name: "Arabasta", eps: 21 },
-    { name: "Jaya", eps: 8 },
-    { name: "Skypiea", eps: 25 },
-    { name: "Long Ring Long Land", eps: 6 },
-    { name: "Water Seven", eps: 20 },
-    { name: "Enies Lobby", eps: 25 },
-    { name: "Post-Enies Lobby", eps: 5 },
-    { name: "Thriller Bark", eps: 22 },
-    { name: "Sabaody Archipelago", eps: 11 },
-    { name: "Amazon Lily", eps: 5 },
-    { name: "Impel Down", eps: 10 },
-    { name: "If You Could Go Anywhere... The Adventures of the Straw Hats", eps: 1 },
-    { name: "Marineford", eps: 17 },
-    { name: "Post-War", eps: 8 },
-    { name: "Return to Sabaody", eps: 3 },
-    { name: "Fishman Island", eps: 24 },
-    { name: "Punk Hazard", eps: 22 },
-    { name: "Dressrosa", eps: 48 },
-    { name: "Zou", eps: 10 },
-    { name: "Whole Cake Island", eps: 39 },
-    { name: "Reverie", eps: 3 },
-    { name: "Wano", eps: 90 },
-    { name: "Egghead", eps: 35 } 
+    { name: "Romance Dawn", eps: 4, q: "Romance Dawn", m: ["romance dawn"] },
+    { name: "Orange Town", eps: 3, q: "Orange Town", m: ["orange town"] },
+    { name: "Syrup Village", eps: 7, q: "Syrup Village", m: ["syrup village"] },
+    { name: "Gaimon", eps: 1, q: "Gaimon", m: ["gaimon"] },
+    { name: "Baratie", eps: 9, q: "Baratie", m: ["baratie"] },
+    { name: "Arlong Park", eps: 10, q: "Arlong Park", m: ["arlong park"] },
+    { name: "The Adventures of Buggy's Crew", eps: 1, q: "Buggy", m: ["buggy"] },
+    { name: "Loguetown", eps: 3, q: "Loguetown", m: ["loguetown"] },
+    { name: "Reverse Mountain", eps: 2, q: "Reverse Mountain", m: ["reverse mountain"] },
+    { name: "Whiskey Peak", eps: 2, q: "Whisky Peak", m: ["whisky peak", "whiskey peak"] },
+    { name: "The Trials of Koby-Meppo", eps: 1, q: "Koby", m: ["koby"] },
+    { name: "Little Garden", eps: 5, q: "Little Garden", m: ["little garden"] },
+    { name: "Drum Island", eps: 8, q: "Drum Island", m: ["drum island"] },
+    { name: "Arabasta", eps: 21, q: "Arabasta", m: ["arabasta", "alabasta"] },
+    { name: "Jaya", eps: 8, q: "Jaya", m: ["jaya"] },
+    { name: "Skypiea", eps: 25, q: "Skypiea", m: ["skypiea"] },
+    { name: "Long Ring Long Land", eps: 6, q: "Long Ring", m: ["long ring"] },
+    { name: "Water Seven", eps: 20, q: "Water Seven", m: ["water 7", "water seven"] },
+    { name: "Enies Lobby", eps: 25, q: "Enies Lobby", m: ["enies lobby"] },
+    { name: "Post-Enies Lobby", eps: 5, q: "Post-Enies", m: ["post-enies", "post enies"] },
+    { name: "Thriller Bark", eps: 22, q: "Thriller Bark", m: ["thriller bark"] },
+    { name: "Sabaody Archipelago", eps: 11, q: "Sabaody", m: ["sabaody"] },
+    { name: "Amazon Lily", eps: 5, q: "Amazon Lily", m: ["amazon lily"] },
+    { name: "Impel Down", eps: 10, q: "Impel Down", m: ["impel down"] },
+    { name: "If You Could Go Anywhere... The Adventures of the Straw Hats", eps: 1, q: "Straw Hat Stories", m: ["straw hat stories", "adventures of the straw hats", "straw hats"] },
+    { name: "Marineford", eps: 17, q: "Marineford", m: ["marineford"] },
+    { name: "Post-War", eps: 8, q: "Post-War", m: ["post-war", "post war"] },
+    { name: "Return to Sabaody", eps: 3, q: "Return to Sabaody", m: ["return to sabaody"] },
+    { name: "Fishman Island", eps: 24, q: "Fishman Island", m: ["fishman island"] },
+    { name: "Punk Hazard", eps: 22, q: "Punk Hazard", m: ["punk hazard"] },
+    { name: "Dressrosa", eps: 48, q: "Dressrosa", m: ["dressrosa"] },
+    { name: "Zou", eps: 10, q: "Zou", m: ["zou"] },
+    { name: "Whole Cake Island", eps: 39, q: "Whole Cake", m: ["whole cake"] },
+    { name: "Reverie", eps: 3, q: "Reverie", m: ["reverie"] },
+    { name: "Wano", eps: 90, q: "Wano", m: ["wano"] },
+    { name: "Egghead", eps: 35, q: "Egghead", m: ["egghead"] } 
 ];
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '4.1.2',
+    version: '4.2.0',
     name: 'One Pace - Torbox Premium',
-    description: 'Standalone One Pace series. Automatically serves the newest Standard release alongside Extended/G8 alternative cuts.',
+    description: 'Standalone One Pace series. Complete site-wide legacy arc coverage with optimized standard & alternate stream slot logic.',
     types: ['series'],
     catalogs: [{
         type: 'series',
@@ -81,16 +82,15 @@ const parseRSS = (xmlText) => {
     return items;
 };
 
-const getMatchingReleases = async (arcName, episode) => {
-    // FIX: Removed strict uploader parameter (&u=Galaxy9000) to search site-wide for Anonymous uploads.
-    // Kept c=1_2 (Anime - English Translated) to keep the payload clean and fast.
+const getMatchingReleases = async (arc, episode) => {
     const baseUrl = 'https://nyaa.si/?page=rss&c=1_2'; 
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
     const epPad = episode.toString().padStart(2, '0');
 
     try {
-        const qIndiv = `One Pace ${arcName} ${epPad}`;
-        const qBatch = `One Pace ${arcName}`;
+        // Search using the specific mapped keyword variant for Nyaa compatibility
+        const qIndiv = `One Pace ${arc.q} ${epPad}`;
+        const qBatch = `One Pace ${arc.q}`;
 
         const [resIndiv, resBatch] = await Promise.all([
             axios.get(`${baseUrl}&q=${encodeURIComponent(qIndiv)}`, { headers }),
@@ -109,7 +109,13 @@ const getMatchingReleases = async (arcName, episode) => {
             uniqueLinks.add(item.link);
 
             const titleLower = item.title.toLowerCase();
-            if (!titleLower.includes('one pace') || !titleLower.includes(arcName.toLowerCase())) continue;
+            
+            // FIX 1: Accommodate legacy single-word tag "[OnePace]" alongside modern "[One Pace]"
+            if (!titleLower.includes('one pace') && !titleLower.includes('onepace')) continue;
+            
+            // FIX 2: Validate against the flexible array of accepted terms for this specific arc
+            const matchesArcName = arc.m.some(term => titleLower.includes(term));
+            if (!matchesArcName) continue;
 
             let cleanTitle = item.title
                 .replace(/\[[a-fA-F0-9]{8}\]/g, '')               
@@ -148,7 +154,7 @@ const getMatchingReleases = async (arcName, episode) => {
                 }
             }
 
-            if (matchesEpisode && arcName.toLowerCase() === 'wano' && isBatch) {
+            if (matchesEpisode && arc.name.toLowerCase() === 'wano' && isBatch) {
                 if (titleLower.includes('act 1') && episode > 12) matchesEpisode = false;
                 if (titleLower.includes('act 2') && (episode < 13 || episode > 30)) matchesEpisode = false;
             }
@@ -231,10 +237,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     if (season < 1 || season > ARCS.length) return { streams: [] };
 
-    const arcName = ARCS[season - 1].name;
-    const epPad = episode.toString().padStart(2, '0');
+    const arcObj = ARCS[season - 1];
+    const arcName = arcObj.name;
 
-    const matchingReleases = await getMatchingReleases(arcName, episode);
+    const matchingReleases = await getMatchingReleases(arcObj, episode);
     if (matchingReleases.length === 0) return { streams: [] };
 
     let bestNormal = null;
@@ -381,4 +387,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v4.1.2 active on port 7000');
+console.log('One Pace Torbox Addon v4.2.0 active on port 7000');
