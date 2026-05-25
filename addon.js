@@ -42,9 +42,9 @@ const ARCS = [
 
 const builder = new addonBuilder({
     id: 'org.vibecode.onepace.torbox',
-    version: '4.0.0',
+    version: '4.1.0',
     name: 'One Pace - Torbox Premium',
-    description: 'Standalone One Pace series with multi-stream variants (G8 Cuts, Extended Cuts) via Torbox.',
+    description: 'Standalone One Pace series. Automatically serves the newest Standard release alongside Extended/G8 alternative cuts.',
     types: ['series'],
     catalogs: [{
         type: 'series',
@@ -109,16 +109,14 @@ const getMatchingReleases = async (arcName, episode) => {
             const titleLower = item.title.toLowerCase();
             if (!titleLower.includes('one pace') || !titleLower.includes(arcName.toLowerCase())) continue;
 
-            // Strict metadata stripping to avoid false hash digits matching
             let cleanTitle = item.title
-                .replace(/\[[a-fA-F0-9]{8}\]/g, '')               // Strip 8-char bracket hashes
-                .replace(/\b(2160|1080|720|480|576)[pP]?\b/g, '')  // Strip resolutions safely
+                .replace(/\[[a-fA-F0-9]{8}\]/g, '')               
+                .replace(/\b(2160|1080|720|480|576)[pP]?\b/g, '')  
                 .replace(/\b10bit\b/gi, '')
                 .replace(/\bx26[45]\b/gi, '')
-                .replace(/\bv\d\b/gi, '')                         // Strip v2, v3 tags
-                .replace(/\bg\d+\b/gi, '');                        // Strip G8 reference digits from episode counting
+                .replace(/\bv\d\b/gi, '')                         
+                .replace(/\bg\d+\b/gi, '');                        
 
-            // 1. Evaluate explicit ranges (e.g. 01-04, 13-30)
             const rangeMatch = cleanTitle.match(/(?<!\d)(\d{1,3})\s*-\s*(\d{1,3})(?!\d)/);
             let matchesEpisode = false;
             let isBatch = false;
@@ -131,7 +129,6 @@ const getMatchingReleases = async (arcName, episode) => {
                     matchesEpisode = true;
                 }
             } else {
-                // 2. Evaluate single standalone episode integers
                 const standaloneNumbers = [];
                 const numRegex = /(?<!\d)(\d{1,3})(?!\d)/g;
                 let m;
@@ -144,13 +141,11 @@ const getMatchingReleases = async (arcName, episode) => {
                         matchesEpisode = true;
                     }
                 } else {
-                    // 3. Absolute structural arc batch (e.g. "One Pace Romance Dawn Batch")
                     isBatch = true;
                     matchesEpisode = true;
                 }
             }
 
-            // Target split criteria optimization for Wano
             if (matchesEpisode && arcName.toLowerCase() === 'wano' && isBatch) {
                 if (titleLower.includes('act 1') && episode > 12) matchesEpisode = false;
                 if (titleLower.includes('act 2') && (episode < 13 || episode > 30)) matchesEpisode = false;
@@ -168,7 +163,6 @@ const getMatchingReleases = async (arcName, episode) => {
             }
         }
 
-        // Return latest releases tracking chronologically downwards
         return matchedReleases.sort((a, b) => b.pubDate - a.pubDate);
     } catch (error) {
         console.error("Nyaa Engine Processing Failure:", error.message);
@@ -241,10 +235,27 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const matchingReleases = await getMatchingReleases(arcName, episode);
     if (matchingReleases.length === 0) return { streams: [] };
 
+    // Targeted Stream Selection Logic
+    let bestNormal = null;
+    let bestAlt = null;
+
+    for (const release of matchingReleases) {
+        if (release.isG8 || release.isExtended) {
+            if (!bestAlt) bestAlt = release;
+        } else {
+            if (!bestNormal) bestNormal = release;
+        }
+        if (bestNormal && bestAlt) break; // We have filled both slots
+    }
+
+    const targetedReleases = [];
+    if (bestNormal) targetedReleases.push(bestNormal);
+    if (bestAlt) targetedReleases.push(bestAlt);
+
     const streams = [];
 
-    // Process up to 4 matches to display all premium stream alternatives (e.g., G8 vs Standard)
-    for (const release of matchingReleases.slice(0, 4)) {
+    // Process our strictly segregated releases
+    for (const release of targetedReleases) {
         const { magnet, isBatch, title: torrentTitle } = release;
         const hashMatch = magnet.match(/urn:btih:([a-zA-Z0-9]+)/);
         if (!hashMatch) continue;
@@ -265,11 +276,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 isCached = !!cData[Object.keys(cData).find(k => k.toLowerCase() === infoHash)];
             }
 
-            // Create clean badges for easy selection inside Stremio's player menu
             let tag = "READY";
             const badges = [];
             if (release.isG8) badges.push("G8 CUT");
-            if (release.isExtended) badges.push("EXTENDED");
+            else if (release.isExtended) badges.push("EXTENDED");
+            else badges.push("STANDARD");
+
             if (release.isBatch) badges.push("BATCH");
             if (badges.length > 0) tag += ` - ${badges.join(" | ")}`;
 
@@ -301,73 +313,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 let fileId = null;
 
                 if (files.length > 0) {
-                    const videoFiles = files.filter(f => f.name.match(/\.(mkv|mp4|avi|webm)$/i));
-                    if (videoFiles.length === 1) {
-                        fileId = videoFiles[0].id;
-                    } else if (videoFiles.length > 1) {
-                        if (isBatch) {
-                            if (arcName === 'Dressrosa') {
-                                videoFiles.sort((a, b) => a.name.localeCompare(b.name)); 
-                                const targetIndex = episode - 1; 
-                                if (targetIndex >= 0 && targetIndex < videoFiles.length) fileId = videoFiles[targetIndex].id;
-                            } else {
-                                // Strictly map using double-escaped boundaries to target file indices
-                                const regEp = new RegExp("(?<!\\d)0*" + episode + "(?!\\d)");
-                                const matchedFile = videoFiles.find(f => {
-                                    const cleanFileName = f.name
-                                        .replace(/\[[a-fA-F0-9]{8}\]/g, '')
-                                        .replace(/\b(2160|1080|720|480|576)[pP]?\b/g, '')
-                                        .replace(/\bv\d\b/gi, '')
-                                        .replace(/\bg\d+\b/gi, '');
-                                    return regEp.test(cleanFileName);
-                                });
-                                fileId = matchedFile ? matchedFile.id : videoFiles[0].id;
-                            }
-                        } else {
-                            videoFiles.sort((a, b) => b.size - a.size);
-                            fileId = videoFiles[0].id;
-                        }
-                    }
-                }
-
-                const dlParams = { token: TORBOX_API_KEY, torrent_id: torrentId };
-                if (fileId !== null) dlParams.file_id = fileId;
-
-                const dlRes = await axios.get(`https://api.torbox.app/v1/api/torrents/requestdl`, {
-                    params: dlParams, headers
-                });
-
-                if (dlRes.data?.success && dlRes.data?.data) {
-                    streams.push({
-                        name: `Torbox\n[${tag}]`,
-                        title: `${torrentTitle}\n⚡ Stream Ready`,
-                        url: dlRes.data.data
-                    });
-                }
-            } else {
-                // Fallback downloading handler
-                axios.post(
-                    'https://api.torbox.app/v1/api/torrents/createtorrent',
-                    new URLSearchParams({ magnet }).toString(),
-                    { headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' }, validateStatus: () => true }
-                ).catch(() => {});
-
-                let slowTag = "DOWNLOADING";
-                if (badges.length > 0) slowTag += ` - ${badges.join(" | ")}`;
-
-                streams.push({
-                    name: `Torbox\n[${slowTag}]`,
-                    title: `Caching... Check back later.\nProcessing release: ${torrentTitle}`,
-                    url: "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-                });
-            }
-        } catch (error) {
-            console.error(`Torbox Pipeline Failure for ${torrentTitle}:`, error.message);
-        }
-    }
-
-    return { streams };
-});
-
-serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('One Pace Torbox Addon v4.0.0 active on port 7000');
+                    const videoFiles = files.filter(f => f.name.match(/\.(mkv|mp4|avi|webm)$/i
