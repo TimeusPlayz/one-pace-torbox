@@ -38,7 +38,7 @@ const ARCS = [
     { name: "Zou", eps: 10, q: "Zou", m: ["zou"] },
     { name: "Whole Cake Island", eps: 39, q: "Whole Cake", m: ["whole cake"] },
     { name: "Reverie", eps: 3, q: "Reverie", m: ["reverie"] },
-    { name: "Wano", eps: 90, q: "Wano", m: ["wano"] },
+    { name: "Wano", eps: 86, q: "Wano", m: ["wano"] },
     { name: "Egghead", eps: 35, q: "Egghead", m: ["egghead"] } 
 ];
 
