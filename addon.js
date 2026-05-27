@@ -7,7 +7,7 @@ const ARCS = [
     { name: "Orange Town", eps: 3, q: "Orange Town", m: ["orange town"] },
     { name: "Syrup Village", eps: 7, q: "Syrup Village", m: ["syrup village"] },
     { name: "Gaimon", eps: 1, q: "Gaimon", m: ["gaimon"] },
-    { name: "Baratie", eps: 9, q: "Baratie", m: ["baratie"] },
+    { name: "Baratie", eps: 8, q: "Baratie", m: ["baratie"] },
     { name: "Arlong Park", eps: 10, q: "Arlong Park", m: ["arlong park"] },
     { name: "The Adventures of Buggy's Crew", eps: 1, q: "Buggy", m: ["buggy", "buggy's crew"] },
     { name: "Loguetown", eps: 3, q: "Loguetown", m: ["loguetown"] },
